@@ -32,7 +32,7 @@ import yaml
 
 from labdaq import __version__
 from labdaq import thermocouple as tc
-from labdaq.tempctrl import make_controller
+from labdaq.tempctrl import OperatorAbort, make_controller
 from run import fmt, load_config, open_instruments, setup_logging, sha256, write_json
 
 log = logging.getLogger("labdaq.iv")
@@ -125,11 +125,13 @@ def wait_stable(rig: Rig, tlog: Csv, label: str, target) -> bool | None:
     source = tcfg.get("stable_source", "dmm")
     if source == "dmm" and not rig.dmm:
         source = "controller"
-    if source == "controller" and not rig.ctrl:
+    has_pv = bool(rig.ctrl) and getattr(rig.ctrl, "has_pv", True)
+    if source == "controller" and not has_pv:
         log.warning("No temperature source available for the stability check; skipping")
         return None
     window, band = float(sc["stable_window_s"]), float(sc["stable_band_c"])
     tol = float(tcfg.get("setpoint_tolerance_c", 2.0))
+    arr = tcfg.get("arrival_tolerance_c")
     hist: collections.deque = collections.deque()
     start = nxt = time.monotonic()
     n = 0
@@ -138,7 +140,7 @@ def wait_stable(rig: Rig, tlog: Csv, label: str, target) -> bool | None:
     while not rig.stop.is_set():
         now = time.monotonic()
         T, e1 = _try(read_temp, rig.dmm, rig.cfg["dmm"]) if rig.dmm else (math.nan, None)
-        pv, e2 = _try(rig.ctrl.read_pv) if rig.ctrl else (math.nan, None)
+        pv, e2 = _try(rig.ctrl.read_pv) if has_pv else (math.nan, None)
         sp, e3 = _try(rig.ctrl.read_sp) if rig.ctrl else (math.nan, None)
         for e in (e1, e2, e3):
             if e:
@@ -150,8 +152,10 @@ def wait_stable(rig: Rig, tlog: Csv, label: str, target) -> bool | None:
         while hist and now - hist[0][0] > window:
             hist.popleft()
         arrived = True
-        if rig.ctrl and target is not None:
+        if has_pv and target is not None:
             arrived = math.isfinite(pv) and abs(pv - target) <= tol
+        elif target is not None and arr is not None:
+            arrived = math.isfinite(T) and abs(T - target) <= float(arr)
         vals = [v for _, v in hist]
         if now - start >= window and arrived and all(math.isfinite(v) for v in vals):
             span = max(vals) - min(vals)
@@ -186,7 +190,7 @@ def run_one_sweep(rig: Rig, s: int, target, points: list[float], ivlog: Csv) -> 
         jobs = {"smu": rig.pool.submit(rig.smu.measure)}
         if rig.dmm:
             jobs["dmm"] = rig.pool.submit(read_temp, rig.dmm, rig.cfg["dmm"])
-        if rig.ctrl:
+        if rig.ctrl and getattr(rig.ctrl, "has_pv", True):
             jobs["ctrl"] = rig.pool.submit(rig.ctrl.read_pv)
         res, errs = {}, {}
         for name, fut in jobs.items():
@@ -282,7 +286,7 @@ def main(argv=None) -> int:
         smu, dmm = open_instruments(cfg, args.sim)
         ctrl = make_controller(cfg, args.sim)
         if args.sim and dmm is not None and ctrl is not None:
-            dmm.follow = ctrl
+            dmm.follow = getattr(ctrl, "plant", None) or ctrl
         smu.configure(dict(cfg["smu"], source_level=0.0))
         if dmm:
             dmm.configure(cfg["dmm"])
@@ -317,6 +321,8 @@ def main(argv=None) -> int:
             if info["aborted"]:
                 exit_reason = info["aborted"]
                 break
+    except OperatorAbort:
+        exit_reason = "user stop"
     except Exception as e:
         exit_reason = f"crash: {e!r}"
         log.exception("Fatal error")
@@ -325,7 +331,7 @@ def main(argv=None) -> int:
             smu.safe_off()
         if ctrl is not None and tcfg.get("end_setpoint_c") is not None:
             try:
-                ctrl.set_sp(float(tcfg["end_setpoint_c"]))
+                getattr(ctrl, "finish", ctrl.set_sp)(float(tcfg["end_setpoint_c"]))
             except Exception as e:
                 log.critical("Could not set end setpoint (%r): SET THE HEATER CONTROLLER MANUALLY", e)
         for dev in (smu, dmm, ctrl):
@@ -334,6 +340,7 @@ def main(argv=None) -> int:
         pool.shutdown(wait=False)
         ivlog.close()
         tlog.close()
+        meta["controller_events"] = getattr(ctrl, "events", None)
         meta.update(end_local=dt.datetime.now().astimezone().isoformat(), exit_reason=exit_reason,
                     iv_sha256=sha256(iv_path), temperature_log_sha256=sha256(t_path))
         write_json(meta_path, meta)

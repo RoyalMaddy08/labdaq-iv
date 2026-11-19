@@ -1,10 +1,15 @@
 temperature_controller:
-  backend: rs485_ascii           # modbus | rs485_ascii | none
+  backend: rs485_ascii           # modbus | rs485_ascii | manual | none
   setpoint_limits_c: [20, 450]
   end_setpoint_c: 30
   temperature_steps_c: [50, 100, 150, 200]
   stable_source: dmm
-  setpoint_tolerance_c: 2.0
+  setpoint_tolerance_c: 2.0      # controller PV vs setpoint (modbus, rs485_ascii)
+  arrival_tolerance_c: 10        # manual: sample T within this of step before 'stable' counts; null = off
+
+  manual:
+    auto_confirm: false          # true = no prompts (sim tests only)
+    beep: true
 
   rs485_ascii:                   # FILL IN from controller manual / rs485_term.py
     port: COM5

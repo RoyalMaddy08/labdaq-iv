@@ -14,6 +14,10 @@ class ControllerError(RuntimeError):
     pass
 
 
+class OperatorAbort(ControllerError):
+    pass
+
+
 def _parity(p):
     import serial
     return {"N": serial.PARITY_NONE, "E": serial.PARITY_EVEN, "O": serial.PARITY_ODD}[str(p).upper()]
@@ -29,6 +33,7 @@ def open_serial(c):
 class TemperatureController:
     name = "base"
     can_set = False
+    has_pv = True
 
     def __init__(self, limits):
         self.lo, self.hi = (float(x) for x in limits)
@@ -265,6 +270,67 @@ class SimController(TemperatureController):
         self.sp = float(t)
 
 
+class ManualController(TemperatureController):
+    name = "manual"
+    can_set = True
+    has_pv = False
+
+    def __init__(self, c: dict, limits, plant=None):
+        super().__init__(limits)
+        self.auto = bool(c.get("auto_confirm", False))
+        self.beep = bool(c.get("beep", True))
+        self.plant = plant
+        self.sp = math.nan
+        self.events = []
+
+    def read_pv(self):
+        return math.nan
+
+    def read_sp(self):
+        return self.sp
+
+    def _done(self, req, got):
+        self.sp = got
+        if self.plant:
+            self.plant.set_sp(got)
+        self.events.append({"t_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                            "requested_c": req, "confirmed_c": got})
+        log.info("operator setpoint %.1f C%s", got, "" if got == req else f" (requested {req})")
+
+    def set_sp(self, t):
+        t = float(t)
+        self.check_limits(t)
+        if self.auto:
+            return self._done(t, t)
+        print(f"\n{'=' * 60}\n  SET HEATER CONTROLLER TO {t:.1f} C\n{'=' * 60}"
+              + ("\a" if self.beep else ""), flush=True)
+        while True:
+            try:
+                r = input("  Enter = done | number = value actually set | q = abort: ").strip()
+            except (EOFError, KeyboardInterrupt):
+                raise OperatorAbort("operator abort") from None
+            if r.lower() == "q":
+                raise OperatorAbort("operator abort")
+            if not r:
+                return self._done(t, t)
+            try:
+                v = float(r)
+                self.check_limits(v)
+                return self._done(t, v)
+            except (ValueError, ControllerError) as e:
+                print(f"  invalid: {e}")
+
+    def finish(self, t):
+        msg = f"SET HEATER CONTROLLER TO {float(t):.1f} C NOW"
+        print(f"\n{'!' * 60}\n  {msg}\n{'!' * 60}" + ("\a" if self.beep else ""), flush=True)
+        log.critical(msg)
+        if self.plant:
+            self.plant.set_sp(float(t))
+
+    def describe(self):
+        return {**super().describe(), "auto_confirm": self.auto}
+
+
 ModbusRTUController = ModbusController
 
 
@@ -274,6 +340,8 @@ def make_controller(cfg: dict, sim: bool = False):
     if b == "none":
         return None
     limits = t["setpoint_limits_c"]
+    if b == "manual":
+        return ManualController(t.get("manual") or {}, limits, SimController(limits) if sim else None)
     if sim:
         return SimController(limits)
     if b == "modbus":

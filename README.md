@@ -8,7 +8,7 @@ The controller backend is chosen in `config.yaml` → `temperature_controller.ba
 |---|---|---|
 | `modbus` | Modbus RTU/ASCII over RS-485 | done |
 | `rs485_ascii` | RS-485, maker's text protocol | done |
-| `manual` | no comms, set by hand | next |
+| `manual` | no comms, set by hand | done |
 | `none` | sweep at current temperature | done |
 
 ## Files
@@ -51,6 +51,13 @@ python rs485_term.py --port COM5
 ```
 
 Fill `read_pv`, `read_sp`, `write_sp`, `checksum`, `eol` from the manual or what works. Send only read commands until you know which one writes. No reply: swap A/B, check baud/parity/address, try `echo: true`.
+
+## Case 3: Manual
+
+`backend: manual`. At each step the script beeps and prints `SET HEATER CONTROLLER TO X C`.
+Set it on the panel, then in the terminal: Enter = done, a number = what you actually set, `q` = abort.
+It then waits until the sample T is within `arrival_tolerance_c` of the step and stable.
+At the end it prints the `end_setpoint_c` to set. Confirmed values go to `metadata.json` → `controller_events`.
 
 ## Bring-up (every backend)
 
