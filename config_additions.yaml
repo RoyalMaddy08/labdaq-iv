@@ -1,40 +1,48 @@
-# Add both blocks to your existing config.yaml
-
-sweep:
-  shape: loop            # single: start->stop | double: start->stop->start | loop: 0->+stop->-stop->0
-  start: -1.0            # V (or A if smu.source_mode is current)
-  stop: 1.0
-  step: 0.02
-  abs_limit: 5.0         # safety: refuse to run if any point exceeds this
-  delay_s: 0.1           # settling time after each step, before measuring
-  n_sweeps: 3
-  pause_between_s: 10
-  abort_on_compliance: true
-  wait_for_stable_T: true
-  stable_window_s: 60    # T must stay within stable_band_c (max-min) for this long
-  stable_band_c: 0.5
-  stable_timeout_s: 1800
-
 temperature_controller:
-  backend: modbus              # modbus | none   (rs485_ascii and manual come next)
-  setpoint_limits_c: [20, 450] # script refuses any setpoint outside this range
-  end_setpoint_c: 30           # applied at end of run AND on crash/Ctrl+C; null = leave unchanged
-  temperature_steps_c: [50, 100, 150, 200]   # null = sweep at the current temperature, never write
-  stable_source: dmm           # dmm (your sample TC) | controller (heater TC): which reading must be flat
-  setpoint_tolerance_c: 2.0    # controller PV must be within this of the setpoint before "stable" counts
-  modbus:
-    port: COM5                 # Windows COMx, Linux /dev/ttyUSB0
-    slave_address: 1
+  backend: rs485_ascii           # modbus | rs485_ascii | none
+  setpoint_limits_c: [20, 450]
+  end_setpoint_c: 30
+  temperature_steps_c: [50, 100, 150, 200]
+  stable_source: dmm
+  setpoint_tolerance_c: 2.0
+
+  rs485_ascii:                   # FILL IN from controller manual / rs485_term.py
+    port: COM5
     baudrate: 9600
-    parity: N                  # N | E | O
+    parity: N
     stopbits: 1
     bytesize: 8
     timeout_s: 0.5
-    pv_register: 4096          # FILL IN from your manual or modbus_probe.py
-    pv_function: 3             # 3 = holding register, 4 = input register
-    sp_register: 4097          # FILL IN
+    address: 1
+    prefix: ""                   # e.g. "\x02" (STX) or "@"
+    eol: "\\r"                   # sent terminator
+    reply_eol: "\\r"             # reply terminator
+    checksum: none               # none | sum8 | xor8 | lrc  (2 hex chars before eol)
+    echo: false                  # true if adapter echoes TX bytes back
+    turnaround_s: 0.02
+    read_pv: "{addr:02d}RPV"     # {addr} = address
+    read_sp: "{addr:02d}RSP"     # "" = no setpoint readback
+    write_sp: "{addr:02d}WSP{value:06.1f}"   # {value} = C/scale, {raw} = int(round(value)); "" = read-only
+    reply_regex: "([-+]?\\d+(?:\\.\\d+)?)\\s*$"   # group 1 = number (last number in reply)
+    write_ack_regex: null        # e.g. "OK|ACK"
+    error_regex: null            # e.g. "ERR|NAK|\\?"
+    invalid_regex: ["oPEn", "----"]           # sensor fault -> NaN
+    scale: 1.0                   # number x scale = C (use 0.1 if reply is 1234 for 123.4)
+
+  modbus:
+    mode: rtu                    # rtu | ascii
+    port: COM5
+    slave_address: 1
+    baudrate: 9600
+    parity: N
+    stopbits: 1
+    bytesize: 8
+    timeout_s: 0.5
+    pv_register: 4096
+    pv_function: 3
+    sp_register: 4097
     sp_read_function: 3
-    write_function: 6          # 6 = write single register (most controllers), 16 = write multiple
-    scale: 0.1                 # raw value x scale = deg C (display shows 1 decimal -> 0.1)
+    write_function: 6
+    scale: 0.1
     signed: true
-    invalid_raw: [32767, -32768]   # raw values the controller uses for sensor fault -> logged as NaN
+    invalid_raw: [32767, -32768]
