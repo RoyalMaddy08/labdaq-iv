@@ -1,0 +1,4 @@
+minimalmodbus>=2.1
+pyserial>=3.5
+pandas
+matplotlib
