@@ -51,3 +51,22 @@ temperature_controller:
     scale: 0.1
     signed: true
     invalid_raw: [32767, -32768]
+
+rt:                              # run_rt.py (R-T), uses temperature_controller.backend above
+  bias_v: 1.0                    # constant bias (V); SMU must be in voltage mode, set compliance in smu block
+  max_bias_v: 5.0                # refuse bigger bias
+  alternate_polarity: false      # true: R = (V+ - V-)/(I+ - I-), cancels offsets/thermo-EMF
+  settle_s: 0.3                  # per polarity, only with alternate_polarity
+  interval_s: 1.0                # one point every interval_s
+  log_every: 10
+  abort_on_compliance: false     # false = flag the point and keep going
+  max_consecutive_errors: 5
+  done_source: dmm               # dmm | controller: which T decides a segment has arrived
+  arrival_tolerance_c: 5         # heating done when T >= target - tol, cooling when T <= target + tol
+  segment_timeout_s: 7200        # move to the next segment anyway (flagged in metadata)
+  sp_update_s: 30                # ramp: setpoint written every N s (keep >= 10 s, many controllers save SP to EEPROM)
+  max_duration_s: null           # backend none only: stop after N s (null = until Ctrl+C)
+  profile:                       # ignored for backend none
+    - {to_c: 400, rate_c_per_min: 5}      # heat; rate null = jump setpoint (always a jump for manual)
+    - {hold_s: 300}
+    - {to_c: 40, rate_c_per_min: null}    # cool (natural cooling)
